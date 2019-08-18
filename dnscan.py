@@ -20,7 +20,11 @@ except ImportError:
 try:    # Python2 and Python3 have different IP address libraries
         from ipaddress import ip_address as ipaddr
 except ImportError:
+    try:
         from  netaddr import IPAddress as ipaddr
+    except ImportError:
+        print("FATAL: Module netaddr missing (python-netaddr or python3-netaddr)")
+        sys.exit(1)
 
 try:
     import argparse
@@ -62,8 +66,9 @@ class scanner(threading.Thread):
                 for rdata in res:
                     address = rdata.address
                     if wildcard:
-                        if address == wildcard:
-                            return
+                        for wildcard_ip in wildcard:
+                            if address == wildcard_ip:
+                                return
                     if args.domain_first:
                         print(domain + " - " + col.brown + address + col.end)
                     else:
@@ -145,15 +150,19 @@ def lookup(domain, recordtype):
 
 def get_wildcard(target):
 
+    # List of IP's for wildcard DNS
+    wildcards = []
     # Use current unix time as a test subdomain
     epochtime = str(int(time.time()))
     # Prepend a letter to work around incompetent companies like CableOne
     # and their stupid attempts at DNS hijacking
     res = lookup("a" + epochtime + "." + target, recordtype)
     if res:
-        address = res[0].address
-        out.good(col.red + "Wildcard" + col.end + " domain found - " + col.brown + address + col.end)
-        return address
+        for res_data in res:
+            address = res_data.address
+            wildcards.append(address)
+            out.good(col.red + "Wildcard" + col.end + " domain found - " + col.brown + address + col.end)
+        return wildcards
     else:
         out.verbose("No wildcard domain found")
 
@@ -255,6 +264,7 @@ def get_args():
     parser.add_argument('-i', '--output-ips',   help="Write discovered IP addresses to a file", dest='output_ips', required=False)
     parser.add_argument('-D', '--domain-first', action="store_true", default=False, help='Output domain first, rather than IP address', dest='domain_first', required=False)
     parser.add_argument('-v', '--verbose', action="store_true", default=False, help='Verbose mode', dest='verbose', required=False)
+    parser.add_argument('-n', '--nocheck', action="store_true", default=False, help='Don\'t check nameservers before scanning', dest='nocheck', required=False)
     args = parser.parse_args()
 
 def setup():
@@ -312,13 +322,15 @@ if __name__ == "__main__":
     out = output()
     get_args()
     setup()
-    try:
-        resolver.query('.', 'NS')
-    except dns.resolver.NoAnswer:
-        pass
-    except dns.exception.Timeout:
-        out.fatal("No valid DNS resolver. Set a custom resolver with -R <resolver>\n")
-        sys.exit(1)
+    if args.nocheck == False:
+        try:
+            resolver.query('.', 'NS')
+        except dns.resolver.NoAnswer:
+            pass
+        except dns.exception.Timeout:
+            out.fatal("No valid DNS resolver. Set a custom resolver with -R <resolver>")
+            out.fatal("Override with -n --nocheck\n")
+            sys.exit(1)
 
     if args.domain_list:
         out.verbose("Domain list provided, will parse {} for domains.".format(args.domain_list))
@@ -375,10 +387,11 @@ if __name__ == "__main__":
             get_mx(target)
             wildcard = get_wildcard(target)
             if wildcard:
-                try:
-                    addresses.add(ipaddr(unicode(wildcard)))
-                except NameError:
-                    addresses.add(ipaddr(str(wildcard)))
+                for wildcard_ip in wildcard:
+                    try:
+                        addresses.add(ipaddr(unicode(wildcard_ip)))
+                    except NameError:
+                        addresses.add(ipaddr(str(wildcard_ip)))
             out.status("Scanning " + target + " for " + recordtype + " records")
             add_target(target)
 
